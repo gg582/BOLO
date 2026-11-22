@@ -12,3 +12,4 @@ yfinance>=0.2.38
 scikit-learn>=1.0.0
 joblib>=1.0.0
 
+timm>=1.0.0
