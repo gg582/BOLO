@@ -106,6 +106,15 @@ def train(args):
     if device.type == "cuda":
         model.to(memory_format=torch.channels_last)
 
+    if args.resume_weights and Path(args.resume_weights).exists():
+        print(f"[Fine-tune] Loading full model weights from {args.resume_weights}...")
+        ckpt = torch.load(args.resume_weights, map_location=device)
+        sd = {k.replace("module.", ""): v for k, v in (ckpt.get("ema") or ckpt.get("model") or ckpt).items()}
+        model.load_state_dict(sd)
+        if "val_loss" in ckpt:
+            best_val_loss = float(ckpt["val_loss"])
+            print(f"[Fine-tune] Inherited best val_loss: {best_val_loss:.4f}")
+
     # Initially freeze backbone if freeze_epochs > 0
     if args.freeze_epochs > 0:
         model.freeze_backbone()
@@ -144,8 +153,14 @@ def train(args):
     print(f"[Training] Starting {args.epochs} epochs (Freeze: {args.freeze_epochs} epochs)...")
     start_time = time.time()
 
+    epochs_no_improve = 0
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
+
+        # Disable mosaic / augmentations in final epochs
+        if args.close_mosaic > 0 and epoch == (args.epochs - args.close_mosaic + 1):
+            print(f"[Training] Epoch {epoch}: Closing mosaic and affine augmentations for final convergence clean-up.")
+            train_dataset.augment = False
 
         # Phase switch: Unfreeze backbone
         if epoch == args.freeze_epochs + 1:
@@ -239,11 +254,18 @@ def train(args):
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                epochs_no_improve = 0
                 torch.save(
                     {"model": (ema.ema if ema else model).state_dict(), "epoch": epoch, "val_loss": val_loss},
                     out_dir / "best.pth",
                 )
                 val_loss_str += " (*best)"
+            else:
+                epochs_no_improve += 1
+                if args.patience > 0 and epochs_no_improve >= args.patience:
+                    print(f"
+[Early Stopping] No improvement in val_loss for {epochs_no_improve} eval intervals ({epochs_no_improve * args.eval_interval} epochs). Stopping early to prevent over-fitting.")
+                    break
 
         # Save last checkpoint
         torch.save(
@@ -266,6 +288,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train AvianHeadDetector on overhead CCTV.")
     parser.add_argument("--data", type=str, default="data/head_dataset/head.yaml", help="Path to head.yaml")
     parser.add_argument("--pretrained", type=str, default="avian_coco_micro.pth", help="Pretrained backbone")
+    parser.add_argument("--resume-weights", type=str, default=None, help="Path to full model checkpoint (best.pth) to resume/finetune from")
+    parser.add_argument("--close-mosaic", type=int, default=15, help="Number of final epochs to disable mosaic & heavy augmentations")
+    parser.add_argument("--patience", type=int, default=10, help="Early stopping patience on val_loss")
     parser.add_argument("--epochs", type=int, default=100, help="Total training epochs")
     parser.add_argument("--freeze-epochs", type=int, default=10, help="Epochs to freeze backbone")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size per forward pass (default 4)")
