@@ -263,8 +263,7 @@ def train(args):
             else:
                 epochs_no_improve += 1
                 if args.patience > 0 and epochs_no_improve >= args.patience:
-                    print(f"
-[Early Stopping] No improvement in val_loss for {epochs_no_improve} eval intervals ({epochs_no_improve * args.eval_interval} epochs). Stopping early to prevent over-fitting.")
+                    print(f"[Early Stopping] No improvement in val_loss for {epochs_no_improve} eval intervals ({epochs_no_improve * args.eval_interval} epochs). Stopping early to prevent over-fitting.")
                     break
 
         # Save last checkpoint
