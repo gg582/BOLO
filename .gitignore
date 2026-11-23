@@ -31,3 +31,6 @@ dataset/
 
 # Downloaded teacher weights (fetched automatically by distill/distill_cifar100.py)
 teachers/
+
+# Runs and checkpoints
+runs/
