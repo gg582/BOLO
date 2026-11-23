@@ -15,3 +15,4 @@ onnxslim>=0.1.71
 onnxruntime-gpu>=1.20.0
 onnxconverter-common>=1.14.0
 
+timm>=1.0.0

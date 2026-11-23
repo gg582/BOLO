@@ -28,3 +28,6 @@ dataset/
 *.pkl
 *.p1
 *.pkl
+
+# Downloaded teacher weights (fetched automatically by distill/distill_cifar100.py)
+teachers/
