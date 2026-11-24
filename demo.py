@@ -118,10 +118,18 @@ def main():
     slideshow_idx = 0
 
     if not args.source:
+        # Prioritize real CCTV footage from open dataset
+        cctv_sample = ROOT / "data" / "cctv_samples" / "cctv_default_demo.mp4"
         demo_video = ROOT / "runs" / "demo_sample_cctv.mp4"
-        if not demo_video.exists():
+        if cctv_sample.exists():
+            source = str(cctv_sample)
+            print(f"[Demo] Using default open CCTV video footage: {cctv_sample}")
+        elif demo_video.exists():
+            source = str(demo_video)
+            print(f"[Demo] Using synthetic CCTV sequence: {demo_video}")
+        else:
             generate_demo_clip_if_needed(demo_video)
-        source = str(demo_video) if demo_video.exists() else "0"
+            source = str(demo_video) if demo_video.exists() else "0"
     else:
         source = args.source
 
