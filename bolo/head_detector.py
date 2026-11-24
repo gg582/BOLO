@@ -1,3 +1,5 @@
+import numpy as np
+from bolo.tracker import AvianHeadTracker
 """AvianHeadDetector: Real-time person head detector for overhead/booth CCTV.
 
 Architecture:
@@ -313,6 +315,7 @@ class AvianHeadDetector(nn.Module):
         self.backbone = AvianRaptorBackbone(pretrained_backbone, use_checkpoint=use_checkpoint)
         self.neck = LightPAN(in_channels=[256, 512, 512], out_ch=neck_channels)
         self.head = DecoupledHead(in_ch=neck_channels, num_classes=num_classes, strides=strides)
+        self.tracker = AvianHeadTracker(max_age=15, min_hits=3, iou_threshold=0.3)
 
     def freeze_backbone(self):
         """Freeze all backbone parameters for warm-up phase."""
@@ -385,6 +388,39 @@ class AvianHeadDetector(nn.Module):
         # Output: [B, N_proposals, 5] (x1, y1, x2, y2, score)
         return torch.cat([all_boxes, all_scores], dim=-1)
 
+
+
+    def track(self, x: torch.Tensor, conf_thresh: float = 0.35, iou_thresh: float = 0.45) -> np.ndarray:
+        """End-to-end inference and Kalman tracking on a single frame.
+
+        Args:
+            x: Input image tensor [1, 3, H, W] in [0, 1] range.
+            conf_thresh: Score threshold for detection candidates.
+            iou_thresh: NMS IoU threshold.
+
+        Returns:
+            np.ndarray: Tracked heads [M, 6] (x1, y1, x2, y2, track_id, score).
+        """
+        with torch.no_grad():
+            proposals = self.forward(x, export_onnx=True)  # [1, N, 5]
+            pred = proposals[0]
+            boxes = pred[:, :4]
+            scores = pred[:, 4]
+
+            mask = scores > conf_thresh
+            boxes = boxes[mask]
+            scores = scores[mask]
+
+            if len(boxes) == 0:
+                dets = np.zeros((0, 5), dtype=np.float32)
+            else:
+                import torchvision.ops as ops
+                keep = ops.nms(boxes, scores, iou_thresh)
+                keep_boxes = boxes[keep].cpu().numpy()
+                keep_scores = scores[keep].cpu().numpy()
+                dets = np.column_stack([keep_boxes, keep_scores])
+
+            return self.tracker.update(dets)
 
 def build_head_detector(pretrained_weights: str = "avian_coco_micro.pth") -> AvianHeadDetector:
     """Convenience builder function."""
