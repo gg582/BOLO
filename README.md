@@ -199,7 +199,6 @@ All checkpoints can be loaded with `AvianRaptorNet_Fast(num_classes=80)`.
 
 ---
 
-<<<<<<< HEAD
 ## 8. BOLO (Birds Only Live Once) — Motion-Robust YOLO11 Detector
 
 **BOLO** extends AvianRaptorNet into the latest YOLO (YOLO11n) detection
