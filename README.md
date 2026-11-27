@@ -199,7 +199,7 @@ All checkpoints can be loaded with `AvianRaptorNet_Fast(num_classes=80)`.
 
 ---
 
-## 8. BOLO (Birds Only Live Once) — Motion-Robust YOLO11 Detector
+## 9. BOLO (Birds Only Live Once) — Motion-Robust YOLO11 Detector
 
 **BOLO** extends AvianRaptorNet into the latest YOLO (YOLO11n) detection
 architecture and adds a dual-stride motion correction layer, targeting
@@ -254,7 +254,7 @@ Produces in the project root:
 
 ---
 
-## 9. BOLO-CIFAR100 Classifier
+## 10. BOLO-CIFAR100 Classifier
 
 `BoloCIFAR100` reforms the proven `../aviannet` AvianRaptorNet-Fast model for
 native 32 x 32 CIFAR-100 images. It retains the checkpoint-compatible
@@ -273,7 +273,94 @@ This creates `bolo_cifar100.pth`, `bolo_cifar100_fp32.onnx`, and
 
 ---
 
-## 10. Citation
+## 11. Benchmarks & Evaluation Scope
+
+The headline numbers above are CIFAR-100 (32 x 32) and COCO object-crop
+classification accuracy. This section adds detection, robustness and
+deployment measurements, and states what has **not** been measured.
+
+Hardware: NVIDIA RTX 3070 (8 GB), AMD Ryzen 5 5600X (6C/12T), PyTorch 2.9.1,
+onnxruntime 1.32 (CPU). Raw outputs are written to `runs/` by the scripts below.
+
+### Complexity & latency
+
+```bash
+python scripts/benchmark_latency.py   # classifiers + BOLO ONNX on CPU
+python -m bolo.benchmark_cctv         # BOLO PyTorch latency on CCTV footage
+```
+
+Median latency at batch 1. GFLOPs = 2 x MACs at the listed input size.
+
+| Model | Input | Params | GFLOPs | GPU FP32 | GPU FP16 | CPU FP32 | GPU FP16 throughput |
+|---|---|---|---|---|---|---|---|
+| AvianRaptorNet-Fast (CIFAR-100) | 32 x 32 | 3.23M | 0.32 | 3.17 ms | 3.11 ms | 8.98 ms | 13,041 img/s (b256) |
+| AvianRaptorNet-Fast (COCO crops) | 128 x 128 | 3.21M | 5.19 | 2.80 ms | 3.20 ms | 44.97 ms | 890 img/s (b32) |
+| BOLO-11n (everyday, 60 cls) | 640 x 640 | 2.88M | 7.99 | 6.51 ms | 7.03 ms | 131.86 ms | — |
+
+| BOLO ONNX export | Size | onnxruntime CPU (640 x 640) |
+|---|---|---|
+| `bolo_everyday_fp32.onnx` | 11.2 MB | 42.91 ms |
+| `bolo_everyday_fp16.onnx` | 5.7 MB | 45.66 ms |
+
+End-to-end BOLO on real CCTV frames (Oxford Town Centre clip
+`data/cctv_samples/cctv_default_demo.mp4`, 1280 x 720, pre-process + forward
++ NMS, GPU FP16): **7.86 ms/frame (~127 FPS)**.
+
+Notes: at batch 1 these small models are kernel-launch bound on the GPU, so
+FP16 gives no latency gain there; it roughly doubles batched throughput. The
+FP16 ONNX graph is half the size but not faster on an x86 CPU without native
+FP16 arithmetic; its latency benefit needs an FP16-capable NPU/GPU target.
+
+### BOLO detection mAP
+
+| Eval set | Images | mAP50 | mAP50-95 | P | R |
+|---|---|---|---|---|---|
+| everyday val (all sources, logged at end of training) | — | 0.364 | 0.282 | 0.506 | 0.365 |
+| everyday val, COCO part only (re-evaluated) | 800 | 0.252 | 0.171 | 0.421 | 0.242 |
+
+The full everyday val set needs the TACO / Office / OpenImages raw data; the
+COCO part is rebuilt deterministically from `data/coco_subset_20k` by
+`bolo/eval_blur_coco.py` (same seed and selection as `prepare_everyday.py`,
+disjoint from training images).
+
+### BOLO motion-blur robustness
+
+```bash
+python -m bolo.eval_blur_coco
+```
+
+Every image of the 800-image COCO everyday val set (3,841 boxes, 31 classes)
+is blurred with a linear motion kernel of the given length (seeded random
+direction per image); evaluated at 640.
+
+| Blur kernel | mAP50 | mAP50-95 | Retained mAP50-95 | P | R |
+|---|---|---|---|---|---|
+| none | 0.252 | 0.171 | 100% | 0.421 | 0.242 |
+| 5 px | 0.244 | 0.165 | 96% | 0.382 | 0.245 |
+| 11 px | 0.219 | 0.146 | 85% | 0.379 | 0.224 |
+| 21 px | 0.185 | 0.118 | 69% | 0.394 | 0.190 |
+| 31 px | 0.136 | 0.085 | 49% | 0.358 | 0.151 |
+
+### Limitations / not yet measured
+
+- **No same-recipe baseline.** A plain YOLO11n trained on the same everyday
+  data with the same blur augmentation has not been run, so the blur
+  retention above cannot yet be attributed to `MotionStrideAttention`.
+- **CCTV domain gap.** On the Oxford Town Centre footage the everyday
+  checkpoint detects almost nothing (max confidence 0.10 at 640, 0.32 at
+  1280, mostly false positives): wide-angle street views with small
+  bags/backpacks are far from its training data. `bolo/benchmark_cctv.py`
+  also reports a label-free clean-vs-blurred consistency check, but it is not
+  meaningful for this checkpoint on this footage. A CCTV fine-tune is needed
+  before CCTV-domain accuracy can be reported.
+- **No high-resolution classification benchmark** (e.g. ImageNet-1k); no
+  ImageNet data is available in this environment.
+- **No on-device measurement.** Latency was measured on a desktop GPU/CPU
+  only; no embedded board (Jetson, mobile NPU, etc.) and no TensorRT/INT8.
+
+---
+
+## 12. Citation
 
 ```bibtex
 @misc{AvianRaptorNet2025,
@@ -288,6 +375,6 @@ This creates `bolo_cifar100.pth`, `bolo_cifar100_fp32.onnx`, and
 
 ---
 
-## 11. License
+## 13. License
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
