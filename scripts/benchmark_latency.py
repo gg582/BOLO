@@ -4,6 +4,7 @@
   (COCO object crops, 80 classes): params, GFLOPs, PyTorch latency on GPU
   (FP32 / FP16, batch-1 latency and batched throughput) and CPU (FP32, batch 1).
   Timing depends only on the architecture, so random weights are used.
+- BOLO-11n batched GPU throughput (FP32 / FP16, batch 16, 640x640).
 - BOLO ONNX exports (FP32 / FP16, 640x640) on onnxruntime CPU, the closest
   available stand-in for an embedded CPU target.
 
@@ -26,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 from core.avian_model import AvianRaptorNet_Fast  # noqa: E402
 
 ONNX_MODELS = ("bolo_everyday_fp32.onnx", "bolo_everyday_fp16.onnx")
+BOLO_WEIGHTS = ROOT / "runs" / "bolo" / "bolo_everyday2" / "weights" / "best.pt"
 
 
 def timed(fn, warmup, iters, sync):
@@ -74,6 +76,27 @@ def bench_classifier(num_classes, size):
     return row
 
 
+@torch.no_grad()
+def bench_bolo_batched(batch=16, size=640):
+    """Batched GPU throughput of the fused BOLO detector (forward only)."""
+    if not (torch.cuda.is_available() and BOLO_WEIGHTS.exists()):
+        return None
+    from bolo.model import register_bolo_modules
+
+    register_bolo_modules()
+    from ultralytics import YOLO
+
+    net = YOLO(str(BOLO_WEIGHTS)).model.fuse().eval().cuda()
+    row = {"batch": batch, "input": f"{size}x{size}"}
+    for half in (False, True):
+        m = net.half() if half else net.float()
+        x = torch.randn(batch, 3, size, size, device="cuda", dtype=torch.float16 if half else torch.float32)
+        ms = timed(lambda: m(x), 5, 30, torch.cuda.synchronize)
+        row["gpu_fp16_img_per_s" if half else "gpu_fp32_img_per_s"] = int(batch / ms * 1e3)
+    print(row)
+    return row
+
+
 def bench_onnx():
     import onnxruntime as ort
 
@@ -107,6 +130,7 @@ def main():
         row = bench_classifier(nc, size)
         report["classifiers"].append(row)
         print(row)
+    report["bolo_gpu_batched"] = bench_bolo_batched()
     report["bolo_onnx_cpu"] = bench_onnx()
     out = ROOT / "runs" / "benchmark_latency.json"
     out.parent.mkdir(parents=True, exist_ok=True)

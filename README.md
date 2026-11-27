@@ -120,6 +120,9 @@ python -m bolo.export_head_detector --weights runs/head_detector/<run>/best.pth
 python -m bolo.infer_video --weights runs/head_detector/<run>/best.pth --source video.mp4
 ```
 
+Accuracy on SCUT-HEAD val: AP50 0.788 / AP50-95 0.323
+(see [§6](#avianheaddetector-scut-head-val)).
+
 **Interactive demo** (`demo.py`): raw detections vs. Kalman-filtered tracks
 with a live HUD (count, latency, FPS). With no `--source` it plays
 `data/cctv_samples/cctv_default_demo.mp4`, a clip of the open Oxford Town
@@ -154,7 +157,7 @@ Median latency at batch 1. GFLOPs = 2 x MACs at the listed input size.
 
 | Model | Input | Params | GFLOPs | GPU FP32 | GPU FP16 | CPU FP32 | GPU FP16 throughput |
 |---|---|---|---|---|---|---|---|
-| BOLO-11n (everyday, 60 cls) | 640 x 640 | 2.88M | 7.99 | 6.51 ms | 7.03 ms | 131.86 ms | — |
+| BOLO-11n (everyday, 60 cls) | 640 x 640 | 2.88M | 7.99 | 6.51 ms | 7.03 ms | 131.86 ms | 574 img/s (b16) |
 
 | BOLO ONNX export | Size | onnxruntime CPU (640 x 640) |
 |---|---|---|
@@ -166,9 +169,11 @@ End-to-end BOLO on real CCTV frames (Oxford Town Centre clip
 + NMS, GPU FP16): **7.86 ms/frame (~127 FPS)**.
 
 Notes: at batch 1 these small models are kernel-launch bound on the GPU, so
-FP16 gives no latency gain there; it roughly doubles batched throughput. The
-FP16 ONNX graph is half the size but not faster on an x86 CPU without native
-FP16 arithmetic; its latency benefit needs an FP16-capable NPU/GPU target.
+FP16 gives no latency gain there. Batched, FP16 pays off: BOLO-11n at batch 16
+runs at 574 img/s in FP16 vs 324 img/s in FP32 (1.77x). The FP16 ONNX graph is
+half the size but no faster on an x86 CPU without native FP16 arithmetic (a
+second run gave 45.6 ms FP32 vs 44.4 ms FP16, i.e. equal within run-to-run
+noise); its latency benefit needs an FP16-capable NPU/GPU target.
 
 ### BOLO detection mAP
 
@@ -200,20 +205,66 @@ direction per image); evaluated at 640.
 | 21 px | 0.185 | 0.118 | 69% | 0.394 | 0.190 |
 | 31 px | 0.136 | 0.085 | 49% | 0.358 | 0.151 |
 
+### MotionStrideAttention test-time bypass (indirect ablation)
+
+```bash
+python -m bolo.eval_blur_coco --no-msa
+```
+
+Without retraining, both `MotionStrideAttention` layers of the same checkpoint
+are replaced by identity (`out = x`) and the blur sweep is repeated. If the
+layer specifically corrected blur, removing it should hurt more as blur grows.
+
+| Blur kernel | mAP50-95 (MSA on) | mAP50-95 (MSA bypassed) | Drop from bypass |
+|---|---|---|---|
+| none | 0.171 | 0.127 | -26% |
+| 5 px | 0.165 | 0.124 | -25% |
+| 11 px | 0.146 | 0.108 | -26% |
+| 21 px | 0.118 | 0.092 | -22% |
+| 31 px | 0.085 | 0.070 | -18% |
+
+**Result: no blur-specific effect.** The network depends on the MSA branch by
+a roughly constant ~25% on clean and mildly blurred images, and *less* under
+heavy blur, so the layer currently acts as a general feature-refinement block,
+not as a blur corrector. This is a post-hoc test (the network was trained with
+the layer present), so it cannot replace a retrained YOLO11n / no-MSA
+baseline, but it gives no evidence for the motion-correction claim so far.
+
+### AvianHeadDetector (SCUT-HEAD val)
+
+```bash
+python -m bolo.eval_head_detector
+```
+
+SCUT-HEAD val split of `data/head_dataset` (646 images, Part A 289 / Part B
+357, 15,466 head boxes), 640 x 640, NMS IoU 0.6, AP over IoU 0.50:0.95 with
+the ultralytics AP routine; P/R at the max-F1 confidence.
+
+| Checkpoint | Epoch | AP50 | AP50-95 | P | R | GPU FP32 forward + NMS |
+|---|---|---|---|---|---|---|
+| `avian_head_scut_real` | 100 | 0.778 | 0.305 | 0.775 | 0.766 | 16.2 ms |
+| `avian_head_finetune_night` | 22 | **0.788** | **0.323** | 0.783 | 0.774 | 16.2 ms |
+
+`best.pth` was selected by validation loss on this same split, so these
+numbers are slightly optimistic. The low AP50-95 relative to AP50 reflects
+the very small SCUT heads (median ~22 px, 77% under 32 px in original
+resolution), where box localization at strict IoU is hard.
+
 ### Limitations / not yet measured
 
-- **No same-recipe baseline.** A plain YOLO11n trained on the same everyday
-  data with the same blur augmentation has not been run, so the blur
-  retention above cannot yet be attributed to `MotionStrideAttention`.
-- **CCTV domain gap.** On the Oxford Town Centre footage the everyday
-  checkpoint detects almost nothing (max confidence 0.10 at 640, 0.32 at
+- **Motion-correction claim not supported yet.** No plain YOLO11n / no-MSA
+  model has been retrained with the same recipe, and the test-time bypass
+  above shows no blur-specific benefit from `MotionStrideAttention`.
+- **CCTV domain gap.** The everyday BOLO checkpoint is not a CCTV model
+  (the CCTV model is AvianHeadDetector, §5). On the Oxford Town Centre
+  footage it detects almost nothing (max confidence 0.10 at 640, 0.32 at
   1280, mostly false positives): wide-angle street views with small
   bags/backpacks are far from its training data. `bolo/benchmark_cctv.py`
   also reports a label-free clean-vs-blurred consistency check, but it is not
-  meaningful for this checkpoint on this footage. A CCTV fine-tune is needed
-  before CCTV-domain accuracy can be reported.
-- **No AvianHeadDetector accuracy numbers** are reported yet (head-detection
-  mAP on SCUT-HEAD / WEPDTOF val).
+  meaningful for this checkpoint on this footage.
+- **AvianHeadDetector on real CCTV is unlabeled.** Head AP is reported on
+  SCUT-HEAD only (classroom and web images); WEPDTOF (fisheye) and labeled CCTV
+  footage (e.g. Town Centre head annotations) have not been evaluated.
 - **No high-resolution classification benchmark** for the AvianRaptorNet
   backbone (e.g. ImageNet-1k); no ImageNet data is available here.
 - **No on-device measurement.** Latency was measured on a desktop GPU/CPU

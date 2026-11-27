@@ -11,8 +11,14 @@ For each motion-blur kernel length the whole set is blurred with a linear
 kernel (seeded random direction per image) and evaluated with the standard
 ultralytics detection metrics (mAP50, mAP50-95, P, R).
 
+With ``--no-msa`` every ``MotionStrideAttention`` layer is bypassed at test
+time (``out = x``) without retraining. Comparing the two runs shows how much
+the trained network relies on the motion-correction branch at each blur
+level. It is an indirect, post-hoc ablation, not a retrained baseline.
+
 Usage:
     python -m bolo.eval_blur_coco
+    python -m bolo.eval_blur_coco --no-msa
 """
 
 import argparse
@@ -107,8 +113,12 @@ def main():
     ap.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--out", default=str(ROOT / "runs" / "bolo" / "eval_blur_coco.json"))
+    ap.add_argument("--no-msa", action="store_true",
+                    help="bypass every MotionStrideAttention layer (out = x) at test time")
+    ap.add_argument("--out", default="")
     args = ap.parse_args()
+    tag = "_nomsa" if args.no_msa else ""
+    args.out = args.out or str(ROOT / "runs" / "bolo" / f"eval_blur_coco{tag}.json")
 
     entries = everyday_coco_val()
     n_boxes = sum(t.count("\n") for _, t in entries)
@@ -123,11 +133,20 @@ def main():
     from ultralytics import YOLO
 
     model = YOLO(args.weights)
+    if args.no_msa:
+        from bolo.modules import MotionStrideAttention
+
+        n = 0
+        for mod in model.model.modules():
+            if isinstance(mod, MotionStrideAttention):
+                mod.forward = lambda x: x
+                n += 1
+        print(f"bypassed {n} MotionStrideAttention layers")
     rows = []
     for k in KERNELS:
         yaml = build_split(entries, k, angles)
         m = model.val(data=str(yaml), imgsz=args.imgsz, batch=args.batch, device=0,
-                      plots=False, verbose=False, project=str(OUT / "val"), name=f"k{k:02d}",
+                      plots=False, verbose=False, project=str(OUT / "val"), name=f"k{k:02d}{tag}",
                       exist_ok=True)
         row = {
             "kernel_px": k,
@@ -144,6 +163,7 @@ def main():
         r["mAP50_95_retained"] = round(r["mAP50_95"] / base, 3) if base else None
     report = {
         "weights": Path(args.weights).name,
+        "msa_bypassed": args.no_msa,
         "images": len(entries),
         "boxes": n_boxes,
         "classes_present": len(per_cls),
