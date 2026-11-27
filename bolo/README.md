@@ -15,9 +15,9 @@ dual-stride motion-attention layer for blurred video frames.
 - `prepare_neatable.py` — 17-class desk-tidy dataset (TACO + office + COCO).
 - `prepare_oid.py` — OpenImages download/conversion for classes missing from
   COCO (desk, plate, mug, pencil case, eraser, plus extra pen/ruler/scissors).
-- `prepare_everyday.py` — 29-class everyday-objects dataset (neatable 17 +
-  backpack, handbag, plate, bowl, spoon, fork, knife, mug, toothbrush, desk,
-  pencil case, eraser). Writes `bolo_everyday.yaml`.
+- `prepare_everyday.py` — 60-class everyday-objects dataset (neatable 17 +
+  household / stationery classes from COCO and OpenImages). Writes
+  `bolo_everyday.yaml`.
 - `train_bolo.py` — BOLO training entry point.
 - `export_bolo.py` — fused PyTorch state-dict, FP32 ONNX, and FP16 ONNX export.
 
@@ -40,7 +40,7 @@ python -m bolo.train_bolo --data bolo_coco20k.yaml --epochs 100 --batch 16 --nam
 python -m bolo.export_bolo --weights runs/bolo/bolo_full/weights/best.pt
 ```
 
-## Everyday-objects dataset (29 classes)
+## Everyday-objects dataset (60 classes)
 
 ```bash
 # Download OpenImages images for the non-COCO classes (one-time, ~2 GB).
@@ -49,7 +49,7 @@ python -m bolo.prepare_oid
 # Build the merged dataset and bolo_everyday.yaml.
 python -m bolo.prepare_everyday
 
-# Train (~3 h on an RTX 3070 at 70 epochs).
+# Train (~5 h on an RTX 3070 at 70 epochs).
 python -m bolo.train_bolo --data bolo_everyday.yaml --epochs 70 --batch 16 --name bolo_everyday
 
 # Export with a distinct prefix.
@@ -78,7 +78,7 @@ deployment model.
 
 ## CIFAR-100 classifier
 
-`BoloCIFAR100` reforms the proven `../aviannet` AvianRaptorNet-Fast CIFAR-100
+`BoloCIFAR100` reforms the AvianRaptorNet-Fast CIFAR-100
 model rather than training a new classifier from scratch. It retains the full
 backbone and classifier, then inserts BOLO dual-stride motion correction after
 the 256-channel stage and before classification. The added branches are
@@ -87,8 +87,8 @@ before fine-tuning.
 
 ```bash
 # Downloads CIFAR-100 into data/ on first use.
-python -m bolo.train_cifar100 --data ../aviannet/data --epochs 40 --batch-size 256 \
-  --init-weights ../aviannet/avian_raptor_fast_best.pth
+python -m bolo.train_cifar100 --data data --epochs 40 --batch-size 256 \
+  --init-weights avian_raptor_fast_best.pth
 
 # Export the best classification checkpoint.
 python -m bolo.export_cifar100 --weights bolo_cifar100_best.pth
